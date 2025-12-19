@@ -14,16 +14,38 @@ router = Router()
 logger = logging.getLogger(__name__)
 
 # 图片URL正则
-IMAGE_URL_PATTERN = re.compile(r'(https?://[^\s\)]+\.(?:png|jpg|jpeg|gif|webp))', re.IGNORECASE)
-URL_IN_MARKDOWN_PATTERN = re.compile(r'\((https?://[^\s\)]+)\)')
+IMAGE_URL_PATTERN = re.compile(r'https?://[^\s\)\]]+\.(?:png|jpg|jpeg|gif|webp)(?:\?[^\s\)\]]*)?', re.IGNORECASE)
+MARKDOWN_IMAGE_PATTERN = re.compile(r'!\[([^\]]*)\]\((https?://[^\s\)]+)\)')
 
 
-async def extract_image_urls(text: str) -> list:
+def extract_image_urls(text: str) -> list:
     """从文本中提取图片URL"""
-    urls = set()
-    urls.update(URL_IN_MARKDOWN_PATTERN.findall(text))
-    urls.update(IMAGE_URL_PATTERN.findall(text))
-    return list(urls)
+    urls = []
+    # 优先匹配 markdown 图片格式
+    for match in MARKDOWN_IMAGE_PATTERN.finditer(text):
+        urls.append(match.group(2))
+    # 匹配直接的图片链接
+    for match in IMAGE_URL_PATTERN.finditer(text):
+        url = match.group(0)
+        if url not in urls:
+            urls.append(url)
+    return urls
+
+
+def remove_image_markdown(text: str) -> str:
+    """移除文本中的 markdown 图片语法"""
+    # 移除 ![alt](url) 格式
+    text = MARKDOWN_IMAGE_PATTERN.sub('', text)
+    # 移除独立的图片URL行
+    lines = text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        stripped = line.strip()
+        # 如果整行只是一个图片URL，跳过
+        if IMAGE_URL_PATTERN.fullmatch(stripped):
+            continue
+        cleaned_lines.append(line)
+    return '\n'.join(cleaned_lines).strip()
 
 
 async def ensure_session(user_id: int, username: str):
@@ -140,17 +162,33 @@ async def chat_handler(message: types.Message):
 
         logger.info(f"Session {session_id} | Reply: {reply_content[:50]}...")
 
-        image_urls = await extract_image_urls(reply_content)
-        formatted_reply = format_reply(reply_content)
+        # 检测回复中的图片URL
+        image_urls = extract_image_urls(reply_content)
 
-        await processing_msg.edit_text(formatted_reply, parse_mode="Markdown")
+        if image_urls:
+            # 有图片：发送图片并附带信息
+            await processing_msg.delete()
+            
+            for i, url in enumerate(image_urls[:3]):
+                try:
+                    caption = f"🔗 {url}\n\n🤖 Model: `{model}`"
+                    await message.answer_photo(url, caption=caption, parse_mode="Markdown")
+                except Exception as img_err:
+                    logger.warning(f"Failed to send image: {img_err}")
+                    # 发送图片失败，发送链接
+                    await message.answer(f"🖼 图片链接: {url}\n🤖 Model: `{model}`", parse_mode="Markdown")
+            
+            # 如果还有其他文本内容，也发送出来
+            remaining_text = remove_image_markdown(reply_content)
+            if remaining_text:
+                formatted = format_reply(remaining_text)
+                await message.answer(formatted, parse_mode="Markdown")
+        else:
+            # 无图片：正常发送文本
+            formatted_reply = format_reply(reply_content)
+            await processing_msg.edit_text(formatted_reply, parse_mode="Markdown")
 
-        for url in image_urls[:3]:
-            try:
-                await message.answer_photo(url)
-            except Exception as img_err:
-                logger.warning(f"Failed to send image preview: {img_err}")
-
+        # 自动标题
         if len(db_messages) == 1:
             asyncio.create_task(auto_title_task(session_id, message.text, reply_content))
 
