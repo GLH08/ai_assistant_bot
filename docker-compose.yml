@@ -1,0 +1,17 @@
+
+
+services:
+  ai-assistant:
+    container_name: ai-assistant-bot
+    # 本地构建请保持 build: .
+    build: .
+    # 使用 GitHub 镜像请取消注释下行并注释 build
+    # image: ghcr.io/glh08/ai_assistant_bot:main
+    restart: always
+    volumes:
+      - ./data:/app/data
+    environment:
+      - API_BASE_URL=${API_BASE_URL}
+      - API_KEY=${API_KEY}
+      - BOT_TOKEN=${BOT_TOKEN}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-gpt-3.5-turbo}
