@@ -1,8 +1,8 @@
 from aiogram import Router, types
 from aiogram.filters import Command, CommandObject
 from openai import AsyncOpenAI
+from src.utils import is_user_allowed
 import os
-
 import logging
 import asyncio
 
@@ -13,12 +13,16 @@ logger.info("GenImage module loaded. Router initialized.")
 
 @router.message(Command("image"))
 async def cmd_image(message: types.Message, command: CommandObject):
+    user_id = message.from_user.id
+    
+    if not is_user_allowed(user_id):
+        await message.answer("⛔ 抱歉，您没有使用此机器人的权限。")
+        return
+    
     prompt = command.args
     if not prompt:
         await message.answer("🎨 请输入提示词，例如：`/image 一只在太空游泳的猫`")
         return
-
-    user_id = message.from_user.id
     logger.info(f"User {user_id} requested image generation. Prompt: {prompt}")
 
     # Determine model: User's session model (if image capable theoretically) or default to dall-e-3

@@ -1,6 +1,7 @@
 from aiogram import Router, types
 from aiogram.filters import CommandStart, Command
 from src.database import add_user, create_session, get_user
+from src.utils import is_user_allowed
 import os
 
 router = Router()
@@ -8,10 +9,14 @@ router = Router()
 @router.message(CommandStart())
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
+    
+    if not is_user_allowed(user_id):
+        await message.answer("⛔ 抱歉，您没有使用此机器人的权限。")
+        return
+    
     username = message.from_user.username or message.from_user.first_name
     await add_user(user_id, username)
     
-    # Check if user has current session, if not create one
     user = await get_user(user_id)
     if not user['current_session_id']:
         default_model = os.getenv("DEFAULT_MODEL", "gpt-3.5-turbo")
@@ -30,6 +35,10 @@ async def cmd_start(message: types.Message):
 
 @router.message(Command("help"))
 async def cmd_help(message: types.Message):
+    if not is_user_allowed(message.from_user.id):
+        await message.answer("⛔ 抱歉，您没有使用此机器人的权限。")
+        return
+        
     await message.answer(
         "📚 帮助文档：\n\n"
         "/start - 初始化\n"

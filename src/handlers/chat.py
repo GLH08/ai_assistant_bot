@@ -7,7 +7,7 @@ import os
 import re
 import asyncio
 import logging
-from src.utils import get_client, auto_title_task
+from src.utils import get_client, auto_title_task, is_user_allowed
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -20,6 +20,10 @@ async def chat_handler(message: types.Message):
         return
 
     user_id = message.from_user.id
+    
+    if not is_user_allowed(user_id):
+        await message.answer("⛔ 抱歉，您没有使用此机器人的权限。")
+        return
     user = await get_user(user_id)
     
     # Ensure session

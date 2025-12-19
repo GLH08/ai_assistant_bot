@@ -15,3 +15,4 @@ services:
       - API_KEY=${API_KEY}
       - BOT_TOKEN=${BOT_TOKEN}
       - DEFAULT_MODEL=${DEFAULT_MODEL:-gpt-3.5-turbo}
+      - ALLOWED_USERS=${ALLOWED_USERS:-}

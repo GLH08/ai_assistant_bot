@@ -6,6 +6,7 @@ from src.database import (
     update_session_curr, update_session_model, 
     update_session_title, get_session, update_session_last_active
 )
+from src.utils import is_user_allowed
 import os
 import logging
 
@@ -15,6 +16,11 @@ logger = logging.getLogger(__name__)
 @router.message(Command("new"))
 async def cmd_new_session(message: types.Message):
     user_id = message.from_user.id
+    
+    if not is_user_allowed(user_id):
+        await message.answer("⛔ 抱歉，您没有使用此机器人的权限。")
+        return
+    
     default_model = os.getenv("DEFAULT_MODEL", "gpt-3.5-turbo")
     
     # Create new session
@@ -26,6 +32,11 @@ async def cmd_new_session(message: types.Message):
 @router.message(Command("history"))
 async def cmd_history(message: types.Message):
     user_id = message.from_user.id
+    
+    if not is_user_allowed(user_id):
+        await message.answer("⛔ 抱歉，您没有使用此机器人的权限。")
+        return
+    
     sessions = await get_user_sessions(user_id)
     
     if not sessions:
@@ -85,6 +96,11 @@ MODELS_PER_PAGE = 5
 @router.message(Command("model"))
 async def cmd_model(message: types.Message, command: CommandObject):
     user_id = message.from_user.id
+    
+    if not is_user_allowed(user_id):
+        await message.answer("⛔ 抱歉，您没有使用此机器人的权限。")
+        return
+    
     user = await get_user(user_id)
     curr_session_id = user['current_session_id']
     
@@ -217,6 +233,11 @@ async def model_callback(callback: types.CallbackQuery):
 @router.message(Command("rename"))
 async def cmd_rename(message: types.Message, command: CommandObject):
     user_id = message.from_user.id
+    
+    if not is_user_allowed(user_id):
+        await message.answer("⛔ 抱歉，您没有使用此机器人的权限。")
+        return
+    
     user = await get_user(user_id)
     curr_session_id = user['current_session_id']
     
