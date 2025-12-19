@@ -5,7 +5,7 @@ from aiogram import Bot, Dispatcher, types
 from dotenv import load_dotenv
 
 from src.database import init_db
-from src.handlers import common, session, gen_image, chat
+from src.handlers import common, session, chat
 
 # Load env
 load_dotenv()
@@ -35,8 +35,7 @@ async def main():
     # Register Routers
     dp.include_router(common.router)
     dp.include_router(session.router)
-    dp.include_router(gen_image.router)
-    dp.include_router(chat.router) # Keep chat last as it handles all messages
+    dp.include_router(chat.router)  # Keep chat last as it handles all messages
 
     # Register Commands
     await bot.set_my_commands([
@@ -45,7 +44,6 @@ async def main():
         types.BotCommand(command="history", description="历史记录"),
         types.BotCommand(command="model", description="切换模型"),
         types.BotCommand(command="rename", description="重命名当前对话"),
-        types.BotCommand(command="image", description="生成图片"),
         types.BotCommand(command="help", description="帮助文档"),
     ])
     logger.info("Bot commands registered.")

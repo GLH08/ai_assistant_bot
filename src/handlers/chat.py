@@ -1,6 +1,7 @@
-from aiogram import Router, types
+from aiogram import Router, types, F
+from aiogram.enums import ContentType
 from src.database import (
-    get_user, get_session, get_session_messages, 
+    get_user, get_session, get_session_messages,
     add_message, create_session
 )
 import os
@@ -12,71 +13,147 @@ from src.utils import get_client, auto_title_task, is_user_allowed
 router = Router()
 logger = logging.getLogger(__name__)
 
-@router.message()
-async def chat_handler(message: types.Message):
-    if not message.text or message.text.startswith('/'):
-        if message.text and message.text.startswith('/'):
-            logger.info(f"Chat handler ignored command: {message.text}")
-        return
+# 图片URL正则
+IMAGE_URL_PATTERN = re.compile(r'(https?://[^\s\)]+\.(?:png|jpg|jpeg|gif|webp))', re.IGNORECASE)
+URL_IN_MARKDOWN_PATTERN = re.compile(r'\((https?://[^\s\)]+)\)')
 
-    user_id = message.from_user.id
-    
-    if not is_user_allowed(user_id):
-        await message.answer("⛔ 抱歉，您没有使用此机器人的权限。")
-        return
+
+async def extract_image_urls(text: str) -> list:
+    """从文本中提取图片URL"""
+    urls = set()
+    urls.update(URL_IN_MARKDOWN_PATTERN.findall(text))
+    urls.update(IMAGE_URL_PATTERN.findall(text))
+    return list(urls)
+
+
+async def ensure_session(user_id: int, username: str):
+    """确保用户有活跃会话"""
     user = await get_user(user_id)
-    
-    # Ensure session
     if not user or not user['current_session_id']:
         default_model = os.getenv("DEFAULT_MODEL", "gpt-3.5-turbo")
         if not user:
             from src.database import add_user
-            username = message.from_user.username or message.from_user.first_name
             await add_user(user_id, username)
-        
         session_id = await create_session(user_id, default_model)
-    else:
-        session_id = user['current_session_id']
-    
-    session = await get_session(session_id)
-    model = session['model']
-    
-    # Save User Message
-    await add_message(session_id, "user", message.text)
-    
-    # Prepare Context
-    db_messages = await get_session_messages(session_id)
-    messages = [{"role": m['role'], "content": m['content']} for m in db_messages]
-    
-    logger.info(f"Session {session_id} | Model: {model} | User: {message.text[:50]}...")
+        return session_id, default_model
+    session = await get_session(user['current_session_id'])
+    return user['current_session_id'], session['model']
 
-    # Send placeholder message
-    processing_msg = await message.answer("🔄 正在思考中...")
-    
+
+def format_reply(text: str) -> str:
+    """格式化回复，将Markdown标题转为粗体"""
+    return re.sub(r'^(#+)\s+(.+)$', r'**\2**', text, flags=re.MULTILINE)
+
+
+@router.message(F.content_type.in_({ContentType.PHOTO}))
+async def photo_handler(message: types.Message):
+    """处理图片消息（多模态支持）"""
+    user_id = message.from_user.id
+
+    if not is_user_allowed(user_id):
+        await message.answer("⛔ 抱歉，您没有使用此机器人的权限。")
+        return
+
+    username = message.from_user.username or message.from_user.first_name
+    session_id, model = await ensure_session(user_id, username)
+
+    photo = message.photo[-1]
+    file = await message.bot.get_file(photo.file_id)
+    file_url = f"https://api.telegram.org/file/bot{message.bot.token}/{file.file_path}"
+
+    caption = message.caption or "请描述这张图片"
+
+    user_content = [
+        {"type": "text", "text": caption},
+        {"type": "image_url", "image_url": {"url": file_url}}
+    ]
+
+    await add_message(session_id, "user", f"[图片] {caption}")
+
+    db_messages = await get_session_messages(session_id)
+    messages = []
+    for m in db_messages[:-1]:
+        messages.append({"role": m['role'], "content": m['content']})
+    messages.append({"role": "user", "content": user_content})
+
+    logger.info(f"Session {session_id} | Model: {model} | User sent image with caption: {caption[:50]}...")
+
+    processing_msg = await message.answer("🔄 正在分析图片...")
+
     try:
         client = get_client()
         response = await client.chat.completions.create(
             model=model,
             messages=messages
         )
-        
+
         reply_content = response.choices[0].message.content
-        
-        # Save Assistant Message
         await add_message(session_id, "assistant", reply_content)
-        
+
         logger.info(f"Session {session_id} | Reply: {reply_content[:50]}...")
 
-        # Fix Markdown Header Issue for Telegram
-        formatted_reply = re.sub(r'^(#+)\s+(.+)$', r'**\2**', reply_content, flags=re.MULTILINE)
-
-        # Edit the placeholder message with the real reply
+        formatted_reply = format_reply(reply_content)
         await processing_msg.edit_text(formatted_reply, parse_mode="Markdown")
-        
-        # Auto Title Check
+
+        if len(db_messages) == 1:
+            asyncio.create_task(auto_title_task(session_id, f"[图片] {caption}", reply_content))
+
+    except Exception as e:
+        logger.error(f"Vision request failed: {e}")
+        await processing_msg.edit_text(f"❌ 请求失败: {str(e)}\n\n模型 `{model}` 可能不支持图像识别。")
+
+
+@router.message(F.text)
+async def chat_handler(message: types.Message):
+    """处理文本消息"""
+    if message.text.startswith('/'):
+        logger.info(f"Chat handler ignored command: {message.text}")
+        return
+
+    user_id = message.from_user.id
+
+    if not is_user_allowed(user_id):
+        await message.answer("⛔ 抱歉，您没有使用此机器人的权限。")
+        return
+
+    username = message.from_user.username or message.from_user.first_name
+    session_id, model = await ensure_session(user_id, username)
+
+    await add_message(session_id, "user", message.text)
+
+    db_messages = await get_session_messages(session_id)
+    messages = [{"role": m['role'], "content": m['content']} for m in db_messages]
+
+    logger.info(f"Session {session_id} | Model: {model} | User: {message.text[:50]}...")
+
+    processing_msg = await message.answer("🔄 正在思考中...")
+
+    try:
+        client = get_client()
+        response = await client.chat.completions.create(
+            model=model,
+            messages=messages
+        )
+
+        reply_content = response.choices[0].message.content
+        await add_message(session_id, "assistant", reply_content)
+
+        logger.info(f"Session {session_id} | Reply: {reply_content[:50]}...")
+
+        image_urls = await extract_image_urls(reply_content)
+        formatted_reply = format_reply(reply_content)
+
+        await processing_msg.edit_text(formatted_reply, parse_mode="Markdown")
+
+        for url in image_urls[:3]:
+            try:
+                await message.answer_photo(url)
+            except Exception as img_err:
+                logger.warning(f"Failed to send image preview: {img_err}")
+
         if len(db_messages) == 1:
             asyncio.create_task(auto_title_task(session_id, message.text, reply_content))
-            
+
     except Exception as e:
         logger.error(f"Chat request failed: {e}")
         await processing_msg.edit_text(f"❌ 请求失败: {str(e)}\n\n可能是模型 `{model}` 配置有误或额度不足。")
