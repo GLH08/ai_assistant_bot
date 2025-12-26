@@ -71,6 +71,78 @@ def format_reply(text: str) -> str:
     return re.sub(r'^(#+)\s+(.+)$', r'**\2**', text, flags=re.MULTILINE)
 
 
+def sanitize_markdown(text: str) -> str:
+    """清理不完整的 Markdown 语法，防止 Telegram 解析失败"""
+    # 统计未闭合的粗体标记
+    bold_count = text.count('**')
+    if bold_count % 2 != 0:
+        # 找到最后一个 ** 并移除
+        last_pos = text.rfind('**')
+        text = text[:last_pos] + text[last_pos+2:]
+    
+    # 统计未闭合的斜体标记（单个 *，但不是 **）
+    # 先临时替换 ** 再统计
+    temp = text.replace('**', '\x00\x00')
+    italic_count = temp.count('*')
+    if italic_count % 2 != 0:
+        # 移除最后一个单独的 *
+        last_pos = temp.rfind('*')
+        temp = temp[:last_pos] + temp[last_pos+1:]
+    text = temp.replace('\x00\x00', '**')
+    
+    # 统计未闭合的代码标记
+    code_count = text.count('`')
+    # 排除 ``` 代码块
+    code_block_count = text.count('```')
+    single_code = code_count - code_block_count * 3
+    if single_code % 2 != 0:
+        last_pos = text.rfind('`')
+        # 确保不是 ``` 的一部分
+        if last_pos >= 2 and text[last_pos-2:last_pos+1] == '```':
+            pass  # 跳过
+        elif last_pos >= 1 and text[last_pos-1:last_pos+1] == '``':
+            pass
+        else:
+            text = text[:last_pos] + text[last_pos+1:]
+    
+    # 检查 ``` 代码块是否闭合
+    if code_block_count % 2 != 0:
+        text += '\n```'
+    
+    return text
+
+
+async def safe_send_message(
+    message: types.Message,
+    text: str,
+    parse_mode: str = "Markdown"
+):
+    """安全发送消息，Markdown 解析失败时回退到纯文本"""
+    try:
+        await message.answer(text, parse_mode=parse_mode)
+    except Exception as e:
+        if "can't parse entities" in str(e):
+            # Markdown 解析失败，发送纯文本
+            await message.answer(text, parse_mode=None)
+        else:
+            raise
+
+
+async def safe_edit_message(
+    msg: types.Message,
+    text: str,
+    parse_mode: str = "Markdown"
+):
+    """安全编辑消息，Markdown 解析失败时回退到纯文本"""
+    try:
+        await msg.edit_text(text, parse_mode=parse_mode)
+    except Exception as e:
+        if "can't parse entities" in str(e):
+            await msg.edit_text(text, parse_mode=None)
+        else:
+            raise
+
+
 async def send_response(
     message: types.Message, 
     processing_msg: types.Message,
@@ -91,28 +163,30 @@ async def send_response(
             except Exception as img_err:
                 logger.warning(f"Failed to send image: {img_err}")
                 await message.answer(
-                    f"🖼 图片链接: {url}\n🤖 Model: `{model}`", 
-                    parse_mode="Markdown"
+                    f"🖼 图片链接: {url}\n🤖 Model: {model}", 
+                    parse_mode=None
                 )
         
         # 发送剩余文本
         remaining_text = remove_image_markdown(reply_content)
         if remaining_text:
             formatted = format_reply(remaining_text)
+            formatted = sanitize_markdown(formatted)
             parts = split_long_message(formatted)
             for part in parts:
-                await message.answer(part, parse_mode="Markdown")
+                await safe_send_message(message, part)
     else:
         # 无图片：发送文本
         formatted_reply = format_reply(reply_content)
+        formatted_reply = sanitize_markdown(formatted_reply)
         parts = split_long_message(formatted_reply)
         
         if len(parts) == 1:
-            await processing_msg.edit_text(parts[0], parse_mode="Markdown")
+            await safe_edit_message(processing_msg, parts[0])
         else:
             await processing_msg.delete()
             for part in parts:
-                await message.answer(part, parse_mode="Markdown")
+                await safe_send_message(message, part)
 
 
 async def call_api_with_retry(model: str, messages: List[dict]) -> str:
@@ -203,10 +277,13 @@ async def photo_handler(message: types.Message):
 
     except Exception as e:
         logger.error(f"Vision request failed: {e}")
-        await processing_msg.edit_text(
-            f"❌ 请求失败: {str(e)}\n\n模型 `{model}` 可能不支持图像识别。",
-            parse_mode="Markdown"
-        )
+        try:
+            await processing_msg.edit_text(
+                f"❌ 请求失败: {str(e)[:200]}\n\n模型 {model} 可能不支持图像识别。",
+                parse_mode=None
+            )
+        except Exception:
+            pass
 
 
 @router.message(F.text)
@@ -254,7 +331,10 @@ async def chat_handler(message: types.Message):
 
     except Exception as e:
         logger.error(f"Chat request failed: {e}")
-        await processing_msg.edit_text(
-            f"❌ 请求失败: {str(e)}\n\n可能是模型 `{model}` 配置有误或额度不足。",
-            parse_mode="Markdown"
-        )
+        try:
+            await processing_msg.edit_text(
+                f"❌ 请求失败: {str(e)[:200]}\n\n可能是模型 {model} 配置有误或额度不足。",
+                parse_mode=None
+            )
+        except Exception:
+            pass

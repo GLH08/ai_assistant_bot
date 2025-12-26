@@ -196,7 +196,12 @@ async def model_callback(callback: types.CallbackQuery):
     if action == "model_page":
         page = int(callback.data.split(":")[1])
         models = await fetch_models_cached()
-        await show_model_page(callback, models, page)
+        try:
+            await show_model_page(callback, models, page)
+        except Exception as e:
+            # 忽略 "message is not modified" 错误
+            if "message is not modified" not in str(e):
+                raise
         await callback.answer()
         return
         
