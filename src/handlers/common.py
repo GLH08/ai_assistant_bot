@@ -1,10 +1,13 @@
+"""通用命令处理"""
 from aiogram import Router, types
 from aiogram.filters import CommandStart, Command
+
+from src.config import config
 from src.database import add_user, create_session, get_user
 from src.utils import is_user_allowed
-import os
 
 router = Router()
+
 
 @router.message(CommandStart())
 async def cmd_start(message: types.Message):
@@ -19,8 +22,7 @@ async def cmd_start(message: types.Message):
     
     user = await get_user(user_id)
     if not user['current_session_id']:
-        default_model = os.getenv("DEFAULT_MODEL", "gpt-3.5-turbo")
-        await create_session(user_id, default_model)
+        await create_session(user_id, config.default_model)
 
     await message.answer(
         "👋 欢迎使用 AI 助手！\n\n"
@@ -31,6 +33,7 @@ async def cmd_start(message: types.Message):
         "/rename <标题> - 重命名当前对话\n\n"
         "💡 直接发送文字或图片即可开始对话。"
     )
+
 
 @router.message(Command("help"))
 async def cmd_help(message: types.Message):
